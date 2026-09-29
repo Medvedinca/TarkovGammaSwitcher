@@ -1,0 +1,15 @@
+[project]
+name = "tarkov-gamma-switcher"
+version = "1.1.0"
+description = "Tray app that switches display gamma while Escape from Tarkov is focused"
+requires-python = ">=3.14"
+dependencies = [
+    "pillow>=12.2.0",
+    "pystray>=0.19.5",
+    "pywin32>=312",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.21.0",
+]
