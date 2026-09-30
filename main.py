@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 import winreg
 
 import pystray
@@ -17,7 +18,7 @@ import winerror
 from PIL import Image, ImageTk
 
 APP_NAME    = "TarkovGammaSwitcher"
-APP_VERSION = "1.1"
+APP_VERSION = "1.1.1"
 
 TARKOV_GAMMA    = 2.80
 TARKOV_CONTRAST = 1.24
@@ -33,6 +34,19 @@ _monitor  = r"\\.\DISPLAY1"
 
 CONFIG_DIR  = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+LOG_PATH    = os.path.join(CONFIG_DIR, "error.log")
+
+def log_error(text):
+    # no console when running as .exe / pythonw, so errors go to a file
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text.rstrip()}\n")
+    except Exception:
+        pass
+
+def _log_exception(exc_type, exc, tb):
+    log_error("".join(traceback.format_exception(exc_type, exc, tb)))
 
 def load_config():
     global _gamma, _contrast, _monitor
@@ -1050,8 +1064,18 @@ def update_tray():
 
 def run_tray():
     global _tray_icon
-    _tray_icon = pystray.Icon(APP_NAME, tray_image(_running), _tray_title(), menu=build_menu())
-    _tray_icon.run()
+    # right after logon the taskbar may not be ready yet, so retry instead of
+    # silently running without a tray icon
+    for _attempt in range(20):
+        try:
+            _tray_icon = pystray.Icon(APP_NAME, tray_image(_running), _tray_title(),
+                                      menu=build_menu())
+            _tray_icon.run()
+            return
+        except Exception:
+            log_error("tray icon failed, retrying:\n" + traceback.format_exc())
+            _tray_icon = None
+            time.sleep(3)
 
 # ── single instance ─────────────────────────────────────────────────────────────
 
@@ -1097,8 +1121,18 @@ def _enable_dpi_awareness():
         except Exception:
             pass
 
+def _hide_console():
+    """The uv venv's pythonw.exe is a console launcher; hide its window on autostart."""
+    hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+    if hwnd:
+        user32.ShowWindow(hwnd, 0)   # SW_HIDE
+
 def main():
     global _ui
+    sys.excepthook = _log_exception
+    threading.excepthook = lambda a: _log_exception(a.exc_type, a.exc_value, a.exc_traceback)
+    if "--autostart" in sys.argv:
+        _hide_console()
     show_event = try_become_primary()
     if show_event is None:
         # another instance is already running – ask it to show its window
@@ -1109,6 +1143,7 @@ def main():
     load_config()            # restore saved gamma/contrast/monitor
     migrate_legacy_startup()
     _ui = GammaUI()
+    _ui.root.report_callback_exception = _log_exception
     start_watcher()
     threading.Thread(target=run_tray, daemon=True).start()
     threading.Thread(target=listen_for_signals, args=(show_event,), daemon=True).start()
